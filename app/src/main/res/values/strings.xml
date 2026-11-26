@@ -1,0 +1,96 @@
+<resources>
+    <string name="app_name">Linkly</string>
+    <string name="app_tagline">المزامنة الذكية بين الهاتف والتلفاز</string>
+    
+    <!-- Mode Labels -->
+    <string name="mode_phone">وضع الهاتف (جهاز التحكم)</string>
+    <string name="mode_tv">وضع التلفاز الذكي (شاشة العرض)</string>
+    <string name="switch_mode">تبديل الوضع يدويًا</string>
+    
+    <!-- Connection Status -->
+    <string name="status_connected">متصل بشاشة التلفاز</string>
+    <string name="status_disconnected">غير متصل</string>
+    <string name="status_listening">في انتظار اتصال الهاتف…</string>
+    <string name="status_searching">جاري البحث التلقائي عبر الشبكة (NSD)…</string>
+    <string name="connect_manual">اتصال يدوي عبر IP</string>
+    <string name="tv_ip_address">عنوان IP للتلفاز</string>
+    <string name="port_number">المنفذ</string>
+    <string name="connect_btn">اتصال</string>
+    <string name="disconnect_btn">قطع الاتصال</string>
+    <string name="reconnect_auto">إعادة اتصال تلقائية</string>
+    <string name="server_running_on">خادم التلفاز يعمل على:</string>
+    
+    <!-- Navigation Tabs / Screen Switcher -->
+    <string name="tab_text">النص والإعلانات</string>
+    <string name="tab_whiteboard">لوحة الرسم والشرح</string>
+    <string name="tab_orders">النداء السريع والطلبات</string>
+    <string name="tab_voice">التحدث المباشر (تكي وكي)</string>
+    <string name="tab_settings">الإعدادات والربط</string>
+    
+    <!-- Remote Screen Control -->
+    <string name="screen_mode_text">عرض النص</string>
+    <string name="screen_mode_whiteboard">لوحة الرسم</string>
+    <string name="screen_mode_image">عرض الصورة</string>
+    <string name="screen_mode_orders">لوحة الطلبات</string>
+    <string name="switch_tv_display">تغيير واجهة التلفاز</string>
+    <string name="wake_up_tv">استدعاء تطبيق التلفاز للواجهة</string>
+    
+    <!-- Text Display Feature -->
+    <string name="enter_text_hint">اكتب النص هنا لعرضه فورًا على شاشة التلفاز…</string>
+    <string name="send_text_to_tv">إرسال للشاشة</string>
+    <string name="font_size">حجم الخط</string>
+    <string name="text_color">لون النص</string>
+    <string name="bg_color">لون الخلفية</string>
+    <string name="text_alignment">المحاذاة</string>
+    <string name="clear_text">مسح النص</string>
+    <string name="preset_welcome">أهلاً وسهلاً بكم!</string>
+    <string name="preset_meeting">الاجتماع سيبدأ بعد قليل</string>
+    <string name="preset_discount">عروض خاصة اليوم بخصم 30%</string>
+    <string name="preset_quiet">يرجى التزام الهدوء من فضلكم</string>
+    <string name="preset_closed">المحل مغلق حالياً نلقاكم غداً</string>
+    
+    <!-- Whiteboard Feature -->
+    <string name="tool_pen">قلم حر</string>
+    <string name="tool_rect">مستطيل</string>
+    <string name="tool_circle">دائرة</string>
+    <string name="tool_eraser">ممحاة</string>
+    <string name="tool_pointer">مؤشر ليزري</string>
+    <string name="stroke_width">سماكة الخط</string>
+    <string name="undo_action">تراجع</string>
+    <string name="clear_all">مسح الكل</string>
+    <string name="add_image_background">إضافة صورة والشرح عليها</string>
+    <string name="remove_background">إزالة الصورة الخلفية</string>
+    <string name="pointer_mode_hint">حرّك إصبعك للإشارة المباشرة على شاشة التلفاز</string>
+    
+    <!-- Walkie Talkie Feature -->
+    <string name="push_to_talk">اضغط للتحدث المباشر</string>
+    <string name="release_to_listen">اترك الزر لإنهاء الإرسال</string>
+    <string name="transmitting">جاري نقل الصوت إلى التلفاز الآن…</string>
+    <string name="receiving_audio">صوت قادم من التلفاز…</string>
+    <string name="remote_mic">ميكروفون ريموت التلفاز</string>
+    <string name="tv_mic_active">ميكروفون التلفاز ينقل الصوت للهاتف</string>
+    
+    <!-- Quick Call & Orders Feature -->
+    <string name="quick_call_title">النداء السريع وطلبات الخدمة</string>
+    <string name="send_order">إرسال الطلب مع النطق</string>
+    <string name="order_tea">شاي بالنعناع</string>
+    <string name="order_coffee">قهوة سريعة</string>
+    <string name="order_water">قارورة ماء</string>
+    <string name="order_meal">وجبة طعام</string>
+    <string name="order_juice">عصير طازج</string>
+    <string name="order_sweets">حلوى</string>
+    <string name="order_clean">تنظيف الطاولة</string>
+    <string name="order_bill">الحساب لو سمحت</string>
+    <string name="custom_order_hint">أو اكتب طلباً خاصاً…</string>
+    <string name="room_or_table">الموقع / الطاولة / الغرفة (اختياري)</string>
+    <string name="order_status_pending">جاري التحضير</string>
+    <string name="order_status_ready">جاهز للاستلام</string>
+    <string name="order_status_done">تم التسليم</string>
+    <string name="play_tts_arabic">نطق الطلب صوتيًا بالعربية</string>
+    <string name="active_orders">الطلبات النشطة على الشاشة</string>
+    
+    <!-- TV Remote D-Pad Navigation Hints -->
+    <string name="remote_hint">استخدم أزرار الأسهم في الريموت للتنقل، وزر الوسط للاختيار، وزر المايك للتحدث</string>
+    <string name="service_notification_title">Linkly قيد التشغيل في الخلفية</string>
+    <string name="service_notification_text">جاهز لتلقي واستدعاء الشاشة والتحدث الصوتي</string>
+</resources>

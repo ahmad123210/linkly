@@ -1,0 +1,8 @@
+{
+  "name": "Linkly",
+  "description": "تطبيق المزامنة الفورية بين الهاتف والتلفاز الذكي: التحدث المباشر، لوحة الرسم والشرح، عرض النصوص، والنداء السريع للطلبات",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

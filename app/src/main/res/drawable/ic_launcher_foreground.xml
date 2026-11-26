@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    
+    <!-- TV Monitor Body -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M24,28h44c2.2,0 4,1.8 4,4v26c0,2.2 -1.8,4 -4,4H24c-2.2,0 -4,-1.8 -4,-4V32C20,29.8 21.8,28 24,28z" />
+    <!-- TV Screen Inner Inset -->
+    <path
+        android:fillColor="#1E1B4B"
+        android:pathData="M26,32h40c1.1,0 2,0.9 2,2v18c0,1.1 -0.9,2 -2,2H26c-1.1,0 -2,-0.9 -2,-2V34C24,32.9 24.9,32 26,32z" />
+    <!-- TV Stand -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M42,62h8v5h-8zM36,67h20v3H36z" />
+
+    <!-- Smartphone overlapping right foreground -->
+    <path
+        android:fillColor="#38BDF8"
+        android:pathData="M56,42h24c2.2,0 4,1.8 4,4v32c0,2.2 -1.8,4 -4,4H56c-2.2,0 -4,-1.8 -4,-4V46C52,43.8 53.8,42 56,42z" />
+    <!-- Phone Screen -->
+    <path
+        android:fillColor="#0F172A"
+        android:pathData="M58,47h20c1.1,0 2,0.9 2,2v22c0,1.1 -0.9,2 -2,2H58c-1.1,0 -2,-0.9 -2,-2V49C56,47.9 56.9,47 58,47z" />
+    <!-- Phone Home Bar / Speaker -->
+    <path
+        android:fillColor="#38BDF8"
+        android:pathData="M65,75h6v1.5h-6z" />
+
+    <!-- Live Sync Waves / Tiki Wike Audio Signals between them -->
+    <path
+        android:strokeColor="#38BDF8"
+        android:strokeWidth="2.5"
+        android:strokeLineCap="round"
+        android:pathData="M33,40c2.5,-3 6.5,-3 9,0 M30,37c4.5,-5 11.5,-5 16,0" />
+
+    <!-- Drawing Stylus Beam / Sparkle on Phone Screen -->
+    <path
+        android:fillColor="#FBBF24"
+        android:pathData="M68,54l2,4l4,2l-4,2l-2,4l-2,-4l-4,-2l4,-2z" />
+</vector>
