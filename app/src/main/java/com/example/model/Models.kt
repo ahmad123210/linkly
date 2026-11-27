@@ -2,7 +2,9 @@ package com.example.model
 
 enum class DeviceRole {
     PHONE,
-    TV
+    TV,
+    /** Extra screen connected to the main TV: a kitchen/bar station or the customer pickup screen. */
+    DISPLAY
 }
 
 enum class TvScreenMode {
@@ -71,7 +73,9 @@ data class TextDisplayData(
 )
 
 enum class OrderStatus(val titleAr: String, val colorHex: String) {
-    PENDING("جاري التحضير", "#F59E0B"),
+    /** New order, not started yet (kept as PENDING for older saved data). */
+    PENDING("جديد", "#F59E0B"),
+    PREPARING("قيد التحضير", "#3B82F6"),
     READY("جاهز للاستلام", "#10B981"),
     DELIVERED("تم التسليم", "#64748B"),
     CANCELLED("ملغي", "#DC2626")
@@ -80,7 +84,11 @@ enum class OrderStatus(val titleAr: String, val colorHex: String) {
 data class OrderItem(
     val name: String,
     val quantity: Int = 1,
-    val emoji: String = "🍵"
+    val emoji: String = "🍵",
+    /** Free note for this item, e.g. "بدون سكر". */
+    val note: String = "",
+    val menuItemId: String = "",
+    val categoryId: String = ""
 )
 
 data class QuickOrder(
@@ -98,7 +106,16 @@ data class QuickOrder(
     val useNotificationSoundOnly: Boolean = false,
     val senderName: String = "نادل 1",
     val senderDeviceId: String = "",
-    val isOfflinePending: Boolean = false
+    val isOfflinePending: Boolean = false,
+    val tableId: String = "",
+    val tableName: String = "",
+    /** A quick call from a waiter (help, bill, cleaning) instead of food. */
+    val isCall: Boolean = false,
+    val preparingAt: Long = 0L,
+    val readyAt: Long = 0L,
+    val deliveredAt: Long = 0L,
+    /** Kitchen screens ("kitchen", "bar") that finished their part of this order. */
+    val readyStations: List<String> = emptyList()
 )
 
 data class DailyOrdersSummary(
@@ -154,4 +171,50 @@ data class ManagedDevice(
 data class BlockedDevice(
     val deviceId: String,
     val name: String
+)
+
+/** A menu section such as hot drinks or meals. Managed from the manager phone, stored on the TV. */
+data class MenuCategory(
+    val id: String = java.util.UUID.randomUUID().toString().take(8),
+    val name: String,
+    val emoji: String = "🍽️",
+    /** Which kitchen screen prepares this section: "kitchen", "bar" (empty = main screen only). */
+    val station: String = ""
+)
+
+data class MenuItem(
+    val id: String = java.util.UUID.randomUUID().toString().take(8),
+    val name: String,
+    val emoji: String = "🍽️",
+    val categoryId: String = "",
+    val price: Double = 0.0,
+    val available: Boolean = true,
+    /** Small JPEG thumbnail in Base64, empty when the item uses its emoji. */
+    val imageB64: String = ""
+)
+
+data class DiningTable(
+    val id: String = java.util.UUID.randomUUID().toString().take(8),
+    val name: String,
+    val zone: String = "داخل"
+)
+
+/** Settings chosen by the manager and kept on the TV. */
+data class LinklySettings(
+    /** Order card turns orange after this many minutes. */
+    val warnMinutes: Int = 10,
+    /** Order card turns red after this many minutes. */
+    val lateMinutes: Int = 20,
+    /** Show images / text / clock on the TV when there are no orders. */
+    val idleEnabled: Boolean = true,
+    val idleDelaySec: Int = 60,
+    val currency: String = ""
+)
+
+data class LinklyConfig(
+    val categories: List<MenuCategory> = emptyList(),
+    val items: List<MenuItem> = emptyList(),
+    val tables: List<DiningTable> = emptyList(),
+    val settings: LinklySettings = LinklySettings(),
+    val version: Long = 0L
 )

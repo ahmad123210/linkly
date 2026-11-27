@@ -2,6 +2,8 @@ package com.example.admin
 
 import android.content.Context
 import android.util.Log
+import com.example.data.ConfigRepository
+import com.example.model.Codec
 import com.example.model.LinklyMessage
 import com.example.network.NetworkManager
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -24,7 +26,8 @@ import java.security.SecureRandom
  */
 class DeviceAdminManager(
     context: Context,
-    private val network: NetworkManager
+    private val network: NetworkManager,
+    private val configRepo: ConfigRepository
 ) {
     companion object {
         private const val TAG = "DeviceAdmin"
@@ -48,9 +51,32 @@ class DeviceAdminManager(
         const val MANAGER_RESULT = "MANAGER_RESULT"
         const val MANAGER_DEVICES = "MANAGER_DEVICES"
         const val DEVICE_BLOCKED = "DEVICE_BLOCKED"
+        const val MANAGER_CONFIG_SAVE = "MANAGER_CONFIG_SAVE"
+        const val MANAGER_RENAME_DEVICE = "MANAGER_RENAME_DEVICE"
+        const val MANAGER_TRANSFER = "MANAGER_TRANSFER"
+        const val MANAGER_BACKUP_GET = "MANAGER_BACKUP_GET"
+        const val MANAGER_BACKUP_DATA = "MANAGER_BACKUP_DATA"
+        const val MANAGER_BACKUP_RESTORE = "MANAGER_BACKUP_RESTORE"
+        const val MANAGER_HISTORY_GET = "MANAGER_HISTORY_GET"
+        const val MANAGER_HISTORY_DATA = "MANAGER_HISTORY_DATA"
+        const val SET_WAITER_NAME = "SET_WAITER_NAME"
 
         private val ADMIN_ACTIONS = setOf(
-            MANAGER_LOGIN, MANAGER_AUTH, MANAGER_LIST, MANAGER_BLOCK, MANAGER_UNBLOCK, MANAGER_RELEASE
+            MANAGER_LOGIN, MANAGER_AUTH, MANAGER_LIST, MANAGER_BLOCK, MANAGER_UNBLOCK, MANAGER_RELEASE,
+            MANAGER_CONFIG_SAVE, MANAGER_RENAME_DEVICE, MANAGER_TRANSFER, MANAGER_BACKUP_GET,
+            MANAGER_BACKUP_RESTORE, MANAGER_HISTORY_GET
+        )
+
+        /**
+         * What is shown on the TV (text, drawing, images, music, live voice, summon).
+         * Once a manager is registered, only the manager phone may send these.
+         */
+        val DISPLAY_ACTIONS = setOf(
+            "SCREEN_SWITCH", "TEXT_UPDATE", "DRAW_STROKE", "DRAW_POINTER", "DRAW_UNDO", "DRAW_CLEAR", "DRAW_BG",
+            "GALLERY_CLEAR", "GALLERY_ADD", "GALLERY_INDEX", "SLIDESHOW_CONFIG",
+            "AUDIO_TOGGLE", "AUDIO_PLAY", "AUDIO_PAUSE", "AUDIO_TRACK",
+            "AUDIO_UPLOAD_START", "AUDIO_UPLOAD_CHUNK", "AUDIO_UPLOAD_FINISH",
+            "VOICE_PTT", "VOICE_CHUNK", "WAKE_UP", "SET_TTS_SETTING", "SET_ACTIVE_ORDER_NUMBER"
         )
     }
 
@@ -68,6 +94,10 @@ class DeviceAdminManager(
 
     // deviceId -> last known name
     private val blocked: MutableMap<String, String> = loadBlocked()
+
+    /** TV: gives the full order history as JSON (set by the screen). */
+    @Volatile
+    var historyProvider: (() -> String)? = null
 
     private var failedAttempts = 0
     private var lockedUntil = 0L
@@ -134,7 +164,23 @@ class DeviceAdminManager(
             handleAdmin(msg)
             return false
         }
+        if (msg.action in DISPLAY_ACTIONS) {
+            val managerDevice = prefs.getString(KEY_MANAGER_DEVICE, "") ?: ""
+            if (managerDevice.isNotBlank() && deviceId != managerDevice) return false
+        }
         return true
+    }
+
+    /** True when this phone (by device id) is the registered manager. */
+    fun isManagerDevice(deviceId: String): Boolean {
+        val managerDevice = prefs.getString(KEY_MANAGER_DEVICE, "") ?: ""
+        return managerDevice.isNotBlank() && managerDevice == deviceId
+    }
+
+    /** Sends the menu, tables and settings to one phone, or to all when clientId is null. */
+    fun sendConfig(clientId: String? = null) {
+        val msg = LinklyMessage(action = ConfigRepository.CONFIG_SYNC, senderRole = "TV", payload = configRepo.toJsonString())
+        if (clientId == null) network.sendMessage(msg) else network.sendTo(clientId, msg)
     }
 
     @Synchronized
@@ -234,6 +280,80 @@ class DeviceAdminManager(
             MANAGER_RELEASE -> {
                 resetManager()
                 reply(msg.clientId, false, "تم إلغاء تسجيل هذا الجهاز كمدير", revoked = true)
+            }
+            MANAGER_CONFIG_SAVE -> {
+                val incoming = obj.optJSONObject("config")
+                if (incoming != null) {
+                    val parsed = Codec.parseConfig(incoming)
+                    configRepo.update { old ->
+                        old.copy(
+                            categories = if (incoming.has("categories")) parsed.categories else old.categories,
+                            items = if (incoming.has("items")) parsed.items else old.items,
+                            tables = if (incoming.has("tables")) parsed.tables else old.tables,
+                            settings = if (incoming.has("settings")) parsed.settings else old.settings
+                        )
+                    }
+                    sendConfig()
+                }
+            }
+            MANAGER_RENAME_DEVICE -> {
+                val target = obj.optString("targetDeviceId")
+                val newName = obj.optString("newName").trim().take(40)
+                if (target.isNotBlank() && newName.isNotBlank()) {
+                    network.connectedClients.value.filter { it.deviceId == target }.forEach { c ->
+                        network.setClientIdentity(c.clientId, target, newName)
+                        network.sendTo(c.clientId, LinklyMessage(action = SET_WAITER_NAME, senderRole = "TV", payload = newName))
+                    }
+                    if (blocked.containsKey(target)) {
+                        blocked[target] = newName
+                        saveBlocked()
+                    }
+                }
+                sendDeviceList(msg.clientId)
+            }
+            MANAGER_TRANSFER -> {
+                val target = obj.optString("targetDeviceId")
+                val targetClients = network.connectedClients.value.filter { it.deviceId == target }
+                if (target.isBlank() || target == registeredDevice || targetClients.isEmpty()) {
+                    reply(msg.clientId, false, "الهاتف المختار غير متصل الآن", token)
+                    return
+                }
+                val newTok = newToken()
+                val newName = targetClients.first().name.ifBlank { "المدير" }
+                prefs.edit()
+                    .putString(KEY_MANAGER_DEVICE, target)
+                    .putString(KEY_MANAGER_TOKEN, newTok)
+                    .putString(KEY_MANAGER_NAME, newName)
+                    .apply()
+                _managerName.value = newName
+                targetClients.forEach { c ->
+                    reply(c.clientId, true, "أصبح هذا الهاتف جهاز المدير", newTok)
+                    sendDeviceList(c.clientId)
+                }
+                reply(msg.clientId, false, "تم نقل صلاحية المدير إلى $newName", revoked = true)
+            }
+            MANAGER_BACKUP_GET -> {
+                val backup = JSONObject().apply {
+                    put("app", "Linkly")
+                    put("backupVersion", 1)
+                    put("createdAt", System.currentTimeMillis())
+                    put("config", JSONObject(configRepo.toJsonString()))
+                }
+                network.sendTo(msg.clientId, LinklyMessage(action = MANAGER_BACKUP_DATA, senderRole = "TV", payload = backup.toString()))
+            }
+            MANAGER_BACKUP_RESTORE -> {
+                val cfg = obj.optJSONObject("config")
+                if (cfg == null) {
+                    reply(msg.clientId, true, "ملف النسخة الاحتياطية غير صالح", token)
+                } else {
+                    configRepo.replace(Codec.parseConfig(cfg))
+                    sendConfig()
+                    reply(msg.clientId, true, "تمت استعادة القائمة والطاولات والإعدادات", token)
+                }
+            }
+            MANAGER_HISTORY_GET -> {
+                val history = historyProvider?.invoke() ?: "[]"
+                network.sendTo(msg.clientId, LinklyMessage(action = MANAGER_HISTORY_DATA, senderRole = "TV", payload = history))
             }
         }
     }

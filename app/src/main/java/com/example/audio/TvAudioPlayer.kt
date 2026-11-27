@@ -241,6 +241,47 @@ class TvAudioPlayer(private val context: Context) {
         }
     }
 
+    /** Urgent order: three quick high beeps, clearly different from the normal chime. */
+    fun playUrgentAlert() {
+        scope.launch {
+            try {
+                val tg = ToneGenerator(AudioManager.STREAM_NOTIFICATION, 100)
+                repeat(3) {
+                    tg.startTone(ToneGenerator.TONE_PROP_BEEP, 180)
+                    kotlinx.coroutines.delay(260)
+                }
+                tg.release()
+            } catch (_: Exception) {
+                playOrderChime()
+            }
+        }
+    }
+
+    /** Waiter call (help, bill, cleaning): a two-tone ding-dong. */
+    fun playCallAlert() {
+        scope.launch {
+            try {
+                val tg = ToneGenerator(AudioManager.STREAM_NOTIFICATION, 90)
+                tg.startTone(ToneGenerator.TONE_DTMF_9, 220)
+                kotlinx.coroutines.delay(280)
+                tg.startTone(ToneGenerator.TONE_DTMF_1, 320)
+                kotlinx.coroutines.delay(380)
+                tg.release()
+            } catch (_: Exception) {
+                playOrderChime()
+            }
+        }
+    }
+
+    /** Sound for a new order, picked by its kind. */
+    fun playForNewOrder(isUrgent: Boolean, isCall: Boolean) {
+        when {
+            isCall -> playCallAlert()
+            isUrgent -> playUrgentAlert()
+            else -> playOrderChime()
+        }
+    }
+
     fun release() {
         stopCurrentPlayback()
     }

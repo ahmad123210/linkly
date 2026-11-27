@@ -36,6 +36,13 @@ import com.example.tts.ArabicTtsManager
 import com.example.LinklyApplication
 import com.example.admin.DeviceAdminManager
 import com.example.model.BlockedDevice
+import com.example.model.Codec
+import com.example.model.LinklyConfig
+import com.example.model.LinklySettings
+import com.example.model.MenuCategory
+import com.example.model.MenuItem
+import com.example.model.DiningTable
+import com.example.notify.WaiterAlerts
 import com.example.model.ManagedDevice
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -67,8 +74,9 @@ class LinklyViewModel(application: Application) : AndroidViewModel(application) 
 
         private val RELAYED_ACTIONS = setOf(
             "ORDER_STATUS", "ORDER_CANCEL", "ORDER_HIDE", "ORDER_RESTORE", "ORDER_DELETE",
-            "SET_ACTIVE_ORDER_NUMBER", "ORDERS_RESTORE_DAY"
+            "SET_ACTIVE_ORDER_NUMBER", "ORDERS_RESTORE_DAY", "ORDER_STATION_READY"
         )
+        const val ORDER_STATION_READY = "ORDER_STATION_READY"
     }
 
     val networkManager = (application as? com.example.LinklyApplication)?.networkManager ?: NetworkManager(application)
@@ -213,6 +221,45 @@ class LinklyViewModel(application: Application) : AndroidViewModel(application) 
     val tvManagerPassword: StateFlow<String> = deviceAdmin.managerPassword
     val tvManagerName: StateFlow<String> = deviceAdmin.managerName
 
+    // --- Menu, tables and settings (owned by the TV, cached on phones) ---
+    val config: StateFlow<LinklyConfig> = app.configRepo.config
+
+    /** This phone's id; orders it sent carry it, so "my orders" and "ready" alerts work. */
+    val myDeviceId: String get() = app.deviceId
+
+    // Manager: backup file content received from the TV, and the full order history.
+    private val _backupData = MutableStateFlow<String?>(null)
+    val backupData: StateFlow<String?> = _backupData.asStateFlow()
+
+    private val _managerHistory = MutableStateFlow<List<QuickOrder>>(emptyList())
+    val managerHistory: StateFlow<List<QuickOrder>> = _managerHistory.asStateFlow()
+
+    private val waiterAlerts by lazy { WaiterAlerts(application) }
+
+    /** Waiter phone: the order being built, per table ("" = no table), kept while switching screens. */
+    val draftCarts = androidx.compose.runtime.mutableStateMapOf<String, List<OrderItem>>()
+
+    /** Waiter / kitchen screens in English on this device. */
+    private val _englishUi = MutableStateFlow(appPrefs.getBoolean("english_ui", false))
+    val englishUi: StateFlow<Boolean> = _englishUi.asStateFlow()
+
+    fun setEnglishUi(on: Boolean) {
+        _englishUi.value = on
+        appPrefs.edit().putBoolean("english_ui", on).apply()
+    }
+
+    /** Extra screen: "kitchen", "bar" or "pickup" (customer pickup numbers). */
+    private val _displayMode = MutableStateFlow(appPrefs.getString("display_mode", "kitchen") ?: "kitchen")
+    val displayMode: StateFlow<String> = _displayMode.asStateFlow()
+
+    fun setDisplayMode(mode: String) {
+        _displayMode.value = mode
+        appPrefs.edit().putString("display_mode", mode).apply()
+    }
+
+    /** Manager password read from the TV's QR code before the phone was connected. */
+    private var pendingManagerCode: String = ""
+
     // Connection Info
     val connectionStatus: StateFlow<ConnectionStatus> = networkManager.connectionStatus
     val connectedDeviceIp: StateFlow<String> = networkManager.connectedDeviceIp
@@ -242,13 +289,21 @@ class LinklyViewModel(application: Application) : AndroidViewModel(application) 
 
         // Phone: introduce itself on every (re)connection, so the TV knows who is who.
         networkManager.onConnectedToServer = {
-            if (_deviceRole.value == DeviceRole.PHONE) {
+            if (isClientRole()) {
                 sendHello()
-                if (_managerToken.value.isNotBlank()) sendManagerCommand(DeviceAdminManager.MANAGER_AUTH)
+                if (_managerToken.value.isNotBlank()) {
+                    sendManagerCommand(DeviceAdminManager.MANAGER_AUTH)
+                } else if (pendingManagerCode.isNotBlank()) {
+                    sendManagerCommand(DeviceAdminManager.MANAGER_LOGIN) { put("password", pendingManagerCode) }
+                    pendingManagerCode = ""
+                }
             }
         }
 
         initializeNetworkRole(_deviceRole.value)
+
+        // TV: the manager phone can ask for the whole order history (reports, export).
+        deviceAdmin.historyProvider = { Codec.ordersToJson(_orders.value).toString() }
 
         // TV audio playback state and playlist synchronization observer
         viewModelScope.launch {
@@ -284,12 +339,12 @@ class LinklyViewModel(application: Application) : AndroidViewModel(application) 
         // Auto-reconnection & auto-pairing observer
         viewModelScope.launch {
             networkManager.connectionStatus.collect { status ->
-                if (status == ConnectionStatus.CONNECTED && _deviceRole.value == DeviceRole.PHONE) {
+                if (status == ConnectionStatus.CONNECTED && isClientRole()) {
                     val savedPin = appPrefs.getString("phone_saved_pin", "") ?: ""
                     if (savedPin.isNotBlank()) {
                         submitPairingPin(savedPin)
                     }
-                } else if (status == ConnectionStatus.DISCONNECTED && _deviceRole.value == DeviceRole.PHONE) {
+                } else if (status == ConnectionStatus.DISCONNECTED && isClientRole()) {
                     _isPaired.value = false
                 }
             }
@@ -298,7 +353,7 @@ class LinklyViewModel(application: Application) : AndroidViewModel(application) 
         // Auto-sync offline orders when paired and connected
         viewModelScope.launch {
             _isPaired.collect { paired ->
-                if (paired && _deviceRole.value == DeviceRole.PHONE && _offlinePendingOrders.value.isNotEmpty()) {
+                if (paired && isClientRole() && _offlinePendingOrders.value.isNotEmpty()) {
                     syncPendingOfflineOrders()
                 }
             }
@@ -316,6 +371,7 @@ class LinklyViewModel(application: Application) : AndroidViewModel(application) 
         if (_deviceRole.value != role) {
             _deviceRole.value = role
             _isPaired.value = role == DeviceRole.TV
+            networkManager.stopAll()
             if (role == DeviceRole.TV) {
                 LinklyBackgroundService.start(getApplication())
             } else {
@@ -332,6 +388,9 @@ class LinklyViewModel(application: Application) : AndroidViewModel(application) 
             networkManager.startClient()
         }
     }
+
+    /** Phones and extra screens both connect to the main TV as clients. */
+    private fun isClientRole(): Boolean = _deviceRole.value != DeviceRole.TV
 
     fun dismissWakeBanner() {
         _showWakeBanner.value = false
@@ -786,7 +845,7 @@ class LinklyViewModel(application: Application) : AndroidViewModel(application) 
         val clean = name.trim().ifBlank { "نادل 1" }
         _waiterName.value = clean
         appPrefs.edit().putString("waiter_name", clean).apply()
-        if (_deviceRole.value == DeviceRole.PHONE) sendHello()
+        if (isClientRole()) sendHello()
     }
 
     fun submitPairingPin(pin: String) {
@@ -898,71 +957,9 @@ class LinklyViewModel(application: Application) : AndroidViewModel(application) 
         )
     }
 
-    private fun orderToJson(order: QuickOrder): JSONObject {
-        return JSONObject().apply {
-            put("id", order.id)
-            put("title", order.title)
-            put("ticketNumber", order.ticketNumber)
-            put("isUrgent", order.isUrgent)
-            put("isHidden", order.isHidden)
-            put("isCancelled", order.isCancelled)
-            put("status", order.status.name)
-            put("timestamp", order.timestamp)
-            put("dateStr", order.dateStr)
-            put("ttsSpeechText", order.ttsSpeechText)
-            put("useNotificationSoundOnly", order.useNotificationSoundOnly)
-            put("senderName", order.senderName)
-            put("senderDeviceId", order.senderDeviceId)
-            put("isOfflinePending", order.isOfflinePending)
-            val itemsArr = JSONArray()
-            order.items.forEach { item ->
-                itemsArr.put(JSONObject().apply {
-                    put("name", item.name)
-                    put("quantity", item.quantity)
-                    put("emoji", item.emoji)
-                })
-            }
-            put("items", itemsArr)
-        }
-    }
+    private fun orderToJson(order: QuickOrder): JSONObject = Codec.orderToJson(order)
 
-    private fun parseOrderFromJson(obj: JSONObject): QuickOrder {
-        val items = mutableListOf<OrderItem>()
-        val itemsArr = obj.optJSONArray("items")
-        if (itemsArr != null) {
-            for (j in 0 until itemsArr.length()) {
-                val itmObj = itemsArr.getJSONObject(j)
-                items.add(
-                    OrderItem(
-                        name = itmObj.optString("name"),
-                        quantity = itmObj.optInt("quantity", 1),
-                        emoji = itmObj.optString("emoji", "🍵")
-                    )
-                )
-            }
-        }
-        val dateStr = obj.optString("dateStr").ifBlank {
-            SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date(obj.optLong("timestamp", System.currentTimeMillis())))
-        }
-
-        return QuickOrder(
-            id = obj.optString("id"),
-            title = obj.optString("title"),
-            ticketNumber = obj.optString("ticketNumber"),
-            isUrgent = obj.optBoolean("isUrgent", false),
-            isHidden = obj.optBoolean("isHidden", false),
-            isCancelled = obj.optBoolean("isCancelled", false),
-            status = try { OrderStatus.valueOf(obj.optString("status", "PENDING")) } catch (_: Exception) { OrderStatus.PENDING },
-            timestamp = obj.optLong("timestamp", System.currentTimeMillis()),
-            dateStr = dateStr,
-            ttsSpeechText = obj.optString("ttsSpeechText"),
-            useNotificationSoundOnly = obj.optBoolean("useNotificationSoundOnly", false),
-            senderName = obj.optString("senderName", "نادل 1"),
-            senderDeviceId = obj.optString("senderDeviceId", ""),
-            isOfflinePending = obj.optBoolean("isOfflinePending", false),
-            items = items
-        )
-    }
+    private fun parseOrderFromJson(obj: JSONObject): QuickOrder = Codec.parseOrder(obj)
 
     // --- Quick Orders Handling & Daily History ---
     fun sendQuickOrder(order: QuickOrder) {
@@ -974,6 +971,7 @@ class LinklyViewModel(application: Application) : AndroidViewModel(application) 
         val finalOrder = orderWithDate.copy(
             useNotificationSoundOnly = !_useTtsForOrders.value,
             senderName = sender,
+            senderDeviceId = if (isClientRole()) app.deviceId else order.senderDeviceId,
             isOfflinePending = !isConnectedAndPaired
         )
 
@@ -1001,8 +999,9 @@ class LinklyViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun updateOrderStatus(orderId: String, newStatus: OrderStatus, hideOrder: Boolean = false) {
+        val now = System.currentTimeMillis()
         val updated = _orders.value.map {
-            if (it.id == orderId) it.copy(status = newStatus, isHidden = if (hideOrder) true else it.isHidden) else it
+            if (it.id == orderId) withStatus(it, newStatus, now).copy(isHidden = if (hideOrder) true else it.isHidden) else it
         }
         _orders.value = updated
         // Advance queue number: when READY, queue number updates to this order; when DELIVERED, it moves to the next ready/pending order!
@@ -1013,6 +1012,7 @@ class LinklyViewModel(application: Application) : AndroidViewModel(application) 
             put("id", orderId)
             put("status", newStatus.name)
             put("isHidden", hideOrder)
+            put("at", now)
             put("activeQueueNumber", _activeUnservedOrderNumber.value)
         }.toString()
 
@@ -1337,13 +1337,42 @@ class LinklyViewModel(application: Application) : AndroidViewModel(application) 
             )
         }
         when (msg.action) {
-            DeviceAdminManager.MANAGER_RESULT -> if (_deviceRole.value == DeviceRole.PHONE) handleManagerResult(msg.payload)
-            DeviceAdminManager.MANAGER_DEVICES -> if (_deviceRole.value == DeviceRole.PHONE) handleManagerDevices(msg.payload)
-            DeviceAdminManager.DEVICE_BLOCKED -> if (_deviceRole.value == DeviceRole.PHONE) {
+            DeviceAdminManager.MANAGER_RESULT -> if (isClientRole()) handleManagerResult(msg.payload)
+            DeviceAdminManager.MANAGER_DEVICES -> if (isClientRole()) handleManagerDevices(msg.payload)
+            DeviceAdminManager.DEVICE_BLOCKED -> if (isClientRole()) {
                 _isBlockedByTv.value = true
                 _isPaired.value = false
                 _pairingError.value = "تم حظر هذا الجهاز من قبل المدير"
                 networkManager.reconnectDelayMs = 30_000L
+            }
+            com.example.data.ConfigRepository.CONFIG_SYNC -> if (isClientRole()) {
+                try {
+                    app.configRepo.applyRemote(JSONObject(msg.payload))
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error parsing config", e)
+                }
+            }
+            DeviceAdminManager.SET_WAITER_NAME -> if (isClientRole() && msg.payload.isNotBlank()) {
+                _waiterName.value = msg.payload.trim()
+                appPrefs.edit().putString("waiter_name", _waiterName.value).apply()
+            }
+            DeviceAdminManager.MANAGER_BACKUP_DATA -> if (isClientRole()) {
+                _backupData.value = msg.payload
+            }
+            DeviceAdminManager.MANAGER_HISTORY_DATA -> if (isClientRole()) {
+                try {
+                    _managerHistory.value = Codec.parseOrders(msg.payload)
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error parsing history", e)
+                }
+            }
+            ORDER_STATION_READY -> {
+                try {
+                    val obj = JSONObject(msg.payload)
+                    applyStationReady(obj.optString("id"), obj.optString("station"))
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error on station ready", e)
+                }
             }
             "SCREEN_SWITCH" -> {
                 try {
@@ -1479,10 +1508,10 @@ class LinklyViewModel(application: Application) : AndroidViewModel(application) 
             }
             // On the TV the background service plays live voice; handling it here too played every chunk twice.
             "VOICE_PTT" -> {
-                if (_deviceRole.value == DeviceRole.PHONE) audioStreamManager.handlePttState(msg.payload)
+                if (isClientRole()) audioStreamManager.handlePttState(msg.payload)
             }
             "VOICE_CHUNK" -> {
-                if (_deviceRole.value == DeviceRole.PHONE) audioStreamManager.handleIncomingAudioChunk(msg.payload)
+                if (isClientRole()) audioStreamManager.handleIncomingAudioChunk(msg.payload)
             }
             "PAIR_REQUEST" -> {
                 if (_deviceRole.value == DeviceRole.TV) {
@@ -1511,6 +1540,7 @@ class LinklyViewModel(application: Application) : AndroidViewModel(application) 
                         if (isSuccess) {
                             sendOrdersSnapshotToClients()
                             broadcastAudioPlaylist()
+                            deviceAdmin.sendConfig(msg.clientId.ifEmpty { null })
                         }
                     } catch (e: Exception) {
                         Log.e(TAG, "Error handling pair request", e)
@@ -1518,7 +1548,7 @@ class LinklyViewModel(application: Application) : AndroidViewModel(application) 
                 }
             }
             "PAIR_RESULT" -> {
-                if (_deviceRole.value == DeviceRole.PHONE) {
+                if (isClientRole()) {
                     try {
                         val obj = JSONObject(msg.payload)
                         val success = obj.optBoolean("success", false)
@@ -1539,7 +1569,7 @@ class LinklyViewModel(application: Application) : AndroidViewModel(application) 
                 }
             }
             "ORDERS_SNAPSHOT" -> {
-                if (_deviceRole.value == DeviceRole.PHONE) {
+                if (isClientRole()) {
                     try {
                         val rootArr = JSONArray(msg.payload)
                         val loaded = mutableListOf<QuickOrder>()
@@ -1577,6 +1607,7 @@ class LinklyViewModel(application: Application) : AndroidViewModel(application) 
                         }
                     }
 
+                    val existedBefore = _orders.value.any { it.id == order.id }
                     val current = _orders.value.toMutableList()
                     current.removeAll { it.id == order.id }
                     current.add(0, order)
@@ -1585,6 +1616,15 @@ class LinklyViewModel(application: Application) : AndroidViewModel(application) 
                     // Update active unserved order number
                     recalculateQueueNumber(_orders.value)
                     saveOrdersHistory()
+
+                    // Extra kitchen/bar screen: a short sound when an order for this station arrives.
+                    if (_deviceRole.value == DeviceRole.DISPLAY && !existedBefore && order.status == OrderStatus.PENDING) {
+                        val mode = _displayMode.value
+                        if (mode != "pickup") {
+                            val stations = order.items.mapNotNull { categoryStations()[it.categoryId] }.toSet()
+                            if (mode in stations) tvAudioPlayer.playOrderChime()
+                        }
+                    }
 
                     // TV: the background service plays the chime (sound only, no pop-up).
                     // Here we only send the (possibly renumbered) order to every phone, sender included.
@@ -1607,9 +1647,11 @@ class LinklyViewModel(application: Application) : AndroidViewModel(application) 
                     val id = obj.optString("id")
                     val status = OrderStatus.valueOf(obj.optString("status"))
                     val isHidden = obj.optBoolean("isHidden", false)
+                    val at = obj.optLong("at", System.currentTimeMillis())
                     val syncQueue = obj.optString("activeQueueNumber")
+                    val before = _orders.value.find { it.id == id }
                     _orders.value = _orders.value.map {
-                        if (it.id == id) it.copy(status = status, isHidden = if (isHidden) true else it.isHidden) else it
+                        if (it.id == id) withStatus(it, status, at).copy(isHidden = if (isHidden) true else it.isHidden) else it
                     }
                     if (syncQueue.isNotBlank()) {
                         _activeUnservedOrderNumber.value = syncQueue
@@ -1618,13 +1660,15 @@ class LinklyViewModel(application: Application) : AndroidViewModel(application) 
                     }
                     saveOrdersHistory()
 
+                    // Phone: only the waiter who sent the order hears about it, and only when it is ready.
                     val matched = _orders.value.find { it.id == id }
-                    val orderLabel = if (matched?.ticketNumber?.isNotBlank() == true) "طلب دور #${matched.ticketNumber}" else (matched?.title ?: "طلبك")
-                    _phoneOrderStatusAlert.value = "تحديث: $orderLabel أصبح (${status.titleAr})!"
-
-                    // Play audible notification on Phone!
-                    if (_deviceRole.value == DeviceRole.PHONE) {
-                        playPhoneNotificationSound()
+                    if (isClientRole() && matched != null &&
+                        matched.senderDeviceId == app.deviceId && status == OrderStatus.READY &&
+                        before?.status != OrderStatus.READY
+                    ) {
+                        val label = orderLabel(matched)
+                        _phoneOrderStatusAlert.value = "$label جاهز للاستلام"
+                        waiterAlerts.orderReady(matched.id, label, matched.items.joinToString("، ") { "${it.quantity} ${it.name}" })
                     }
                 } catch (e: Exception) {
                     Log.e(TAG, "Error updating order status", e)
@@ -1648,11 +1692,12 @@ class LinklyViewModel(application: Application) : AndroidViewModel(application) 
                     // Trigger distinct cancel warning tone on TV, or phone notification
                     if (_deviceRole.value == DeviceRole.TV) {
                         tvAudioPlayer.playOrderCancelAlert()
-                    } else if (_deviceRole.value == DeviceRole.PHONE) {
+                    } else if (isClientRole()) {
                         val matched = _orders.value.find { it.id == id }
-                        val orderLabel = if (matched?.ticketNumber?.isNotBlank() == true) "طلب دور #${matched.ticketNumber}" else (matched?.title ?: "الطلب")
-                        _phoneOrderStatusAlert.value = "تنبيه: تم إلغاء $orderLabel!"
-                        playPhoneNotificationSound()
+                        if (matched != null && matched.senderDeviceId == app.deviceId && msg.senderRole == DeviceRole.TV.name) {
+                            _phoneOrderStatusAlert.value = "تنبيه: تم إلغاء ${orderLabel(matched)}"
+                            waiterAlerts.orderCancelled(matched.id, orderLabel(matched))
+                        }
                     }
                 } catch (e: Exception) {
                     Log.e(TAG, "Error processing cancel order", e)
@@ -1788,7 +1833,7 @@ class LinklyViewModel(application: Application) : AndroidViewModel(application) 
                 }
             }
             "AUDIO_STATE" -> {
-                if (_deviceRole.value == DeviceRole.PHONE) {
+                if (isClientRole()) {
                     try {
                         val obj = JSONObject(msg.payload)
                         _syncedAudioPlaybackState.value = AudioPlaybackState(
@@ -1800,7 +1845,7 @@ class LinklyViewModel(application: Application) : AndroidViewModel(application) 
                 }
             }
             "AUDIO_PLAYLIST_SYNC" -> {
-                if (_deviceRole.value == DeviceRole.PHONE) {
+                if (isClientRole()) {
                     try {
                         val arr = JSONArray(msg.payload)
                         val list = mutableListOf<AudioTrackItem>()
@@ -1891,6 +1936,15 @@ class LinklyViewModel(application: Application) : AndroidViewModel(application) 
         sendManagerCommand(DeviceAdminManager.MANAGER_LOGIN) { put("password", password.trim()) }
     }
 
+    /** From the TV's QR code (scanned in the app, or opened from the camera as linkly://manager?code=...). */
+    fun loginWithQrContent(content: String): Boolean {
+        val code = Regex("code=(\\d{6})").find(content)?.groupValues?.get(1)
+            ?: content.trim().takeIf { it.length == 6 && it.all(Char::isDigit) }
+            ?: return false
+        if (connectionStatus.value == ConnectionStatus.CONNECTED) managerLogin(code) else pendingManagerCode = code
+        return true
+    }
+
     fun refreshManagedDevices() {
         if (_managerToken.value.isNotBlank()) sendManagerCommand(DeviceAdminManager.MANAGER_LIST)
     }
@@ -1969,6 +2023,156 @@ class LinklyViewModel(application: Application) : AndroidViewModel(application) 
         } catch (e: Exception) {
             Log.e(TAG, "Error parsing device list", e)
         }
+    }
+
+    private fun orderLabel(o: QuickOrder): String = when {
+        o.tableName.isNotBlank() -> "طلب طاولة ${o.tableName}"
+        o.ticketNumber.isNotBlank() -> "طلب رقم ${o.ticketNumber.trimStart('#')}"
+        else -> o.title.ifBlank { "الطلب" }
+    }
+
+    /** Applies a new status and stamps the time it happened (used for timers and statistics). */
+    private fun withStatus(o: QuickOrder, status: OrderStatus, at: Long): QuickOrder = when (status) {
+        OrderStatus.PENDING -> o.copy(status = status, isCancelled = false)
+        OrderStatus.READY -> o.copy(status = status, readyAt = if (o.readyAt == 0L) at else o.readyAt)
+        OrderStatus.DELIVERED -> o.copy(
+            status = status,
+            readyAt = if (o.readyAt == 0L) at else o.readyAt,
+            deliveredAt = at
+        )
+        else -> o.copy(status = status)
+    }
+
+    // --- Kitchen boards ---
+
+    private fun categoryStations(): Map<String, String> = config.value.categories.associate { it.id to it.station }
+
+    /** Main TV: one tap moves an order on: new -> preparing -> ready -> delivered (hidden). */
+    fun advanceOrder(o: QuickOrder) {
+        when {
+            o.isCancelled || o.status == OrderStatus.CANCELLED -> hideOrder(o.id)
+            o.isCall -> updateOrderStatus(o.id, OrderStatus.DELIVERED, hideOrder = true)
+            o.status == OrderStatus.PENDING -> updateOrderStatus(o.id, OrderStatus.PREPARING)
+            o.status == OrderStatus.PREPARING -> updateOrderStatus(o.id, OrderStatus.READY)
+            o.status == OrderStatus.READY -> updateOrderStatus(o.id, OrderStatus.DELIVERED, hideOrder = true)
+            else -> {}
+        }
+    }
+
+    /** Extra kitchen/bar screen: start the order, then mark only this station's part as ready. */
+    fun advanceOrderAtStation(o: QuickOrder, station: String) {
+        if (o.status == OrderStatus.PENDING) {
+            updateOrderStatus(o.id, OrderStatus.PREPARING)
+            return
+        }
+        applyStationReady(o.id, station)
+        networkManager.sendMessage(
+            LinklyMessage(
+                action = ORDER_STATION_READY,
+                senderRole = _deviceRole.value.name,
+                payload = JSONObject().apply { put("id", o.id); put("station", station) }.toString()
+            )
+        )
+    }
+
+    /** Adds the station; on the main TV, the order turns ready once every station is done. */
+    private fun applyStationReady(id: String, station: String) {
+        if (station.isBlank()) return
+        _orders.value = _orders.value.map {
+            if (it.id == id && station !in it.readyStations) it.copy(readyStations = it.readyStations + station) else it
+        }
+        saveOrdersHistory()
+        if (_deviceRole.value == DeviceRole.TV) {
+            val o = _orders.value.find { it.id == id } ?: return
+            val needed = o.items.mapNotNull { categoryStations()[it.categoryId]?.takeIf { s -> s.isNotBlank() } }.toSet()
+            val hasMainOnlyItems = o.items.any { categoryStations()[it.categoryId].isNullOrBlank() }
+            if (!hasMainOnlyItems && needed.isNotEmpty() && o.readyStations.containsAll(needed) &&
+                (o.status == OrderStatus.PENDING || o.status == OrderStatus.PREPARING)
+            ) {
+                updateOrderStatus(id, OrderStatus.READY)
+            }
+        }
+    }
+
+    // --- Manager: menu, tables, settings (sent to the TV, which keeps them and updates every phone) ---
+    private fun sendConfigChange(build: JSONObject.() -> Unit) {
+        if (_managerToken.value.isBlank()) return
+        if (connectionStatus.value != ConnectionStatus.CONNECTED) {
+            _managerMessage.value = "الهاتف غير متصل بالتلفاز، لم يُحفظ التغيير"
+            return
+        }
+        sendManagerCommand(DeviceAdminManager.MANAGER_CONFIG_SAVE) {
+            put("config", JSONObject().apply(build))
+        }
+    }
+
+    fun saveMenu(categories: List<MenuCategory>, items: List<MenuItem>) {
+        // Show the change right away; the TV confirms with CONFIG_SYNC.
+        app.configRepo.applyRemote(Codec.configToJson(config.value.copy(categories = categories, items = items)))
+        sendConfigChange {
+            val full = Codec.configToJson(LinklyConfig(categories = categories, items = items))
+            put("categories", full.getJSONArray("categories"))
+            put("items", full.getJSONArray("items"))
+        }
+    }
+
+    fun saveTables(tables: List<DiningTable>) {
+        app.configRepo.applyRemote(Codec.configToJson(config.value.copy(tables = tables)))
+        sendConfigChange {
+            put("tables", Codec.configToJson(LinklyConfig(tables = tables)).getJSONArray("tables"))
+        }
+    }
+
+    fun saveSettings(settings: LinklySettings) {
+        app.configRepo.applyRemote(Codec.configToJson(config.value.copy(settings = settings)))
+        sendConfigChange { put("settings", Codec.settingsToJson(settings)) }
+    }
+
+    fun renameDevice(device: ManagedDevice, newName: String) {
+        sendManagerCommand(DeviceAdminManager.MANAGER_RENAME_DEVICE) {
+            put("targetDeviceId", device.deviceId)
+            put("newName", newName.trim())
+        }
+    }
+
+    fun transferManager(device: ManagedDevice) {
+        sendManagerCommand(DeviceAdminManager.MANAGER_TRANSFER) { put("targetDeviceId", device.deviceId) }
+    }
+
+    fun requestBackup() {
+        _backupData.value = null
+        sendManagerCommand(DeviceAdminManager.MANAGER_BACKUP_GET)
+    }
+
+    fun clearBackupData() {
+        _backupData.value = null
+    }
+
+    fun restoreBackup(json: String) {
+        try {
+            val root = JSONObject(json)
+            val cfg = root.optJSONObject("config") ?: root
+            sendManagerCommand(DeviceAdminManager.MANAGER_BACKUP_RESTORE) { put("config", cfg) }
+        } catch (e: Exception) {
+            _managerMessage.value = "ملف النسخة الاحتياطية غير صالح"
+        }
+    }
+
+    fun requestHistory() {
+        sendManagerCommand(DeviceAdminManager.MANAGER_HISTORY_GET)
+    }
+
+    /** Waiter quick call (help, bill, cleaning): goes to the TV like an order, with its own sound. */
+    fun sendCall(label: String, emoji: String, table: DiningTable?) {
+        val order = QuickOrder(
+            title = label,
+            items = listOf(OrderItem(name = label, quantity = 1, emoji = emoji)),
+            isCall = true,
+            tableId = table?.id ?: "",
+            tableName = table?.name ?: "",
+            ttsSpeechText = if (table != null) "$label، طاولة ${table.name}" else label
+        )
+        sendQuickOrder(order)
     }
 
     // --- Manager role (TV side) ---

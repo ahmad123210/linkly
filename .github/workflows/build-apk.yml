@@ -2,7 +2,7 @@ name: Build APK
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, 'claude/**' ]
   workflow_dispatch:
 
 permissions:
@@ -49,5 +49,6 @@ jobs:
           TAG="build-${{ github.run_number }}"
           gh release create "$TAG" out/Linkly.apk \
             --title "Linkly (build ${{ github.run_number }})" \
-            --notes "APK جاهز للتثبيت المباشر. بُني من ${GITHUB_SHA::7}." \
+            --notes "APK جاهز للتثبيت المباشر. بُني من ${GITHUB_SHA::7} (${GITHUB_REF_NAME})." \
+            --target "${GITHUB_SHA}" \
             --latest

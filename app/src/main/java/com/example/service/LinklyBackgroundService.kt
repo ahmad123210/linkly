@@ -203,7 +203,12 @@ class LinklyBackgroundService : Service() {
                         }
                         "ORDER_NEW" -> {
                             // Sound only: no text notification and no forced screen change.
-                            app.tvAudioPlayer.playOrderChime()
+                            // A different sound for urgent orders and for waiter calls.
+                            val obj = try { org.json.JSONObject(msg.payload) } catch (_: Exception) { null }
+                            app.tvAudioPlayer.playForNewOrder(
+                                isUrgent = obj?.optBoolean("isUrgent", false) ?: false,
+                                isCall = obj?.optBoolean("isCall", false) ?: false
+                            )
                         }
                         "VOICE_PTT" -> app.audioStreamManager.handlePttState(msg.payload)
                         "VOICE_CHUNK" -> app.audioStreamManager.handleIncomingAudioChunk(msg.payload)

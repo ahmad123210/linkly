@@ -29,6 +29,7 @@ import com.example.service.LinklyBackgroundService
 import com.example.ui.phone.PhoneMainScreen
 import com.example.ui.theme.MyApplicationTheme
 import com.example.ui.tv.TvMainScreen
+import com.example.ui.tv.DisplayMainScreen
 import com.example.viewmodel.LinklyViewModel
 
 class MainActivity : ComponentActivity() {
@@ -51,6 +52,12 @@ class MainActivity : ComponentActivity() {
                     LaunchedEffect(deviceRole) {
                         if (deviceRole == DeviceRole.TV) {
                             LinklyBackgroundService.start(applicationContext)
+                        }
+                        // Kitchen / hall screens must never go dark.
+                        if (deviceRole == DeviceRole.PHONE) {
+                            window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                        } else {
+                            window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                         }
                     }
 
@@ -81,6 +88,7 @@ class MainActivity : ComponentActivity() {
                             when (role) {
                                 DeviceRole.TV -> TvMainScreen(viewModel = viewModel)
                                 DeviceRole.PHONE -> PhoneMainScreen(viewModel = viewModel)
+                                DeviceRole.DISPLAY -> DisplayMainScreen(viewModel = viewModel)
                             }
                         }
                     }
@@ -96,6 +104,12 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handleNavigationIntent(intent: Intent?) {
+        // linkly://manager?code=123456 (the TV's manager QR code, opened from the phone camera)
+        val data = intent?.data
+        if (data != null && data.scheme == "linkly" && data.host == "manager") {
+            viewModel.loginWithQrContent(data.toString())
+            return
+        }
         val dest = intent?.getStringExtra("EXTRA_NAVIGATE_TO") ?: return
         try {
             val mode = TvScreenMode.valueOf(dest)
