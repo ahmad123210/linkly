@@ -8,6 +8,7 @@ import android.content.res.Configuration
 import com.example.admin.DeviceAdminManager
 import com.example.audio.AudioStreamManager
 import com.example.data.ConfigRepository
+import com.example.data.OrdersRepository
 import com.example.audio.TvAudioPlayer
 import com.example.model.DeviceRole
 import com.example.network.NetworkManager
@@ -30,6 +31,7 @@ class LinklyApplication : Application() {
     val tvAudioPlayer: TvAudioPlayer by lazy { TvAudioPlayer(this) }
     val arabicTtsManager: ArabicTtsManager by lazy { ArabicTtsManager(this) }
     val configRepo: ConfigRepository by lazy { ConfigRepository(this) }
+    val ordersRepo: OrdersRepository by lazy { OrdersRepository(this) }
     val deviceAdmin: DeviceAdminManager by lazy { DeviceAdminManager(this, networkManager, configRepo) }
 
     /** Stable random id for this install, used by the TV to recognise phones (manager, blocking). */

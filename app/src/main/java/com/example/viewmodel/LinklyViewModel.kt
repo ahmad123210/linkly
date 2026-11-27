@@ -945,7 +945,9 @@ class LinklyViewModel(application: Application) : AndroidViewModel(application) 
 
     fun sendOrdersSnapshotToClients() {
         val rootArr = JSONArray()
-        _orders.value.forEach { order ->
+        // Phones only need recent days; the manager asks for the full history separately.
+        val yesterday = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date(System.currentTimeMillis() - 24 * 3600_000L))
+        _orders.value.filter { it.dateStr >= yesterday || !it.isHidden }.forEach { order ->
             rootArr.put(orderToJson(order))
         }
         networkManager.sendMessage(
@@ -1148,17 +1150,7 @@ class LinklyViewModel(application: Application) : AndroidViewModel(application) 
         updateDailyHistoryGrouping(snapshot)
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                val rootArr = JSONArray()
-                snapshot.forEach { order ->
-                    rootArr.put(orderToJson(order))
-                }
-                ioMutex.withLock {
-                    // Write to a temp file then rename, so a crash mid-write never corrupts the history.
-                    val dir = getApplication<Application>().filesDir
-                    val tmp = File(dir, "orders_history.json.tmp")
-                    FileOutputStream(tmp).use { it.write(rootArr.toString().toByteArray()) }
-                    tmp.renameTo(File(dir, "orders_history.json"))
-                }
+                ioMutex.withLock { app.ordersRepo.save(snapshot) }
             } catch (e: Exception) {
                 Log.e(TAG, "Error saving orders history", e)
             }
@@ -1168,22 +1160,14 @@ class LinklyViewModel(application: Application) : AndroidViewModel(application) 
     private fun loadOrdersHistory() {
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                val file = File(getApplication<Application>().filesDir, "orders_history.json")
-                if (!file.exists()) return@launch
+                val loaded = ioMutex.withLock { app.ordersRepo.load() }
+                if (loaded.isEmpty()) return@launch
+                // Keep anything that arrived while loading.
+                val merged = (_orders.value + loaded).distinctBy { it.id }
+                _orders.value = merged
+                updateDailyHistoryGrouping(merged)
 
-                val jsonStr = file.readText()
-                val rootArr = JSONArray(jsonStr)
-                val loaded = mutableListOf<QuickOrder>()
-
-                for (i in 0 until rootArr.length()) {
-                    loaded.add(parseOrderFromJson(rootArr.getJSONObject(i)))
-                }
-
-                _orders.value = loaded
-                updateDailyHistoryGrouping(loaded)
-
-                // Set initial active unserved order number from latest pending ticket
-                val latestPending = loaded.find { !it.isHidden && it.status == OrderStatus.PENDING && !it.isCancelled }
+                val latestPending = merged.find { !it.isHidden && it.status == OrderStatus.PENDING && !it.isCancelled }
                 if (latestPending != null && latestPending.ticketNumber.isNotBlank()) {
                     _activeUnservedOrderNumber.value = latestPending.ticketNumber
                 }
